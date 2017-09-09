@@ -5,6 +5,9 @@ require __DIR__ . '/vendor/autoload.php';
 use \Wa72\HtmlPageDom\HtmlPageCrawler;
 
 $issue_id = '2461695';
+$project = 'paragraphs';
+$branch = '8.x-1.x';
+
 $issue_url = 'https://www.drupal.org/node/' . $issue_id;
 $html = file_get_contents($issue_url);
 
@@ -44,3 +47,33 @@ foreach ($comments as $comment) {
 }
 
 ksort($patches);
+
+// Read information from git repo.
+$dir = __DIR__ . '/../temp';
+$repo = "https://git.drupal.org/project/$project.git";
+$branch_prefix = time();
+
+// Clone repo
+$git_wrapper = new \GitWrapper\GitWrapper();
+if (file_exists($dir)) {
+  $git = $git_wrapper->workingCopy($dir);
+}
+else {
+  $git = $git_wrapper->cloneRepository($repo, $dir, ['branch' => $branch]);
+}
+
+foreach ($patches as $patch) {
+
+  // LASTHASH=$(git rev-list -n 1 --before="$PROJECTTIME" $BRANCH)
+  $patch_name = basename($patch['files'][0], '.patch');
+  $comment_id = $patch['comment'];
+
+  // Get commit hash of the time the patch was posted in the issue queue.
+  $command = sprintf('rev-list -n 1 --before="%s" %s', $patch['time'], $branch);
+  $hash = trim($git->run([$command])->getOutput());
+
+  $git->checkout($hash);
+  $git->checkoutNewBranch("$branch_prefix/issue/$issue_id/$comment_id");
+
+  echo sprintf('#%s = User: %s - Time %s: %s => Hash: %s', $comment_id, $patch['user'], $patch['time'], $patch_name , $hash) . PHP_EOL;
+}
