@@ -69,11 +69,48 @@ foreach ($patches as $patch) {
   $comment_id = $patch['comment'];
 
   // Get commit hash of the time the patch was posted in the issue queue.
+  $git->getOutput();
   $command = sprintf('rev-list -n 1 --before="%s" %s', $patch['time'], $branch);
   $hash = trim($git->run([$command])->getOutput());
 
   $git->checkout($hash);
   $git->checkoutNewBranch("$branch_prefix/issue/$issue_id/$comment_id");
 
-  echo sprintf('#%s = User: %s - Time %s: %s => Hash: %s', $comment_id, $patch['user'], $patch['time'], $patch_name , $hash) . PHP_EOL;
+  $message = sprintf('Issue %s [#%s] = User: %s - Time %s: %s => Hash: %s', $issue_id, $comment_id, $patch['user'], $patch['time'], $patch_name , $hash);
+  echo $message . PHP_EOL;
+
+  // Load patch file in temporary file.
+  $patch_content = file_get_contents($patch['files'][0]);
+
+  $tmpHandle = tmpfile();
+  fwrite($tmpHandle, $patch_content);
+  // Get tmp file location.
+  $metaDatas = stream_get_meta_data($tmpHandle);
+  $tmpFilename = $metaDatas['uri'];
+
+  $p = 0;
+  $retry = TRUE;
+  do {
+
+    try {
+      $ret = $git->apply($tmpFilename, ['p' => $p])->getOutput();
+      $retry = FALSE;
+    }
+    catch (\Exception $e) {
+      $p++;
+    }
+  } while($retry && $p < 5);
+
+  if ($git->hasChanges()) {
+    $git->add('', ['all' => true]);
+    $git->commit($message);
+  }
+  else {
+    echo "NO CHANGES or Could not apply patch";
+  }
+
+  echo $git->getOutput();
+
+  fclose($tmpHandle);
+
 }
