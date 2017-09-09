@@ -15,9 +15,12 @@ class Repository {
 
   protected $directory;
 
+  /**
+   * @var \GitWrapper\GitWorkingCopy
+   */
   protected $git;
 
-  public function __construct($project, $branch, $directory) {
+  public function __construct($project, $directory, $branch) {
     $this->project = $project;
     $this->branch = $branch;
     $this->directory = $directory;
@@ -39,6 +42,19 @@ class Repository {
     else {
       $this->git = $git_wrapper->cloneRepository($this->getRepositoryURL(), $this->directory, ['branch' => $this->branch]);
     }
+  }
+
+  public function getHashByDateTime($datetime) {
+    $this->git->getOutput();
+    $command = sprintf('rev-list -n 1 --before="%s" %s', $datetime, $this->branch);
+    $hash_output = $this->git->run([$command])->getOutput();
+    return trim($hash_output);
+  }
+
+  public function createBranchFromHash($branch, $hash) {
+    return $this->git->checkout($hash)
+      ->checkoutNewBranch($branch)
+      ->getOutput();
   }
 
 }
