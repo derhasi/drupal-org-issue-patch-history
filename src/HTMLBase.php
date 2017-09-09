@@ -24,7 +24,8 @@ abstract class HTMLBase {
    * @return mixed
    */
   protected function setData($data) {
-    return $this->data;
+    $this->data = $data;
+    return $this;
   }
 
   /**
