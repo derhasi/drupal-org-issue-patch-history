@@ -30,8 +30,9 @@ foreach ($comments as $comment) {
     }
     $comment_id = $match[1];
 
-    $user = $cc->filter('a.username')->first()->text();
+    $user = $cc->filter('a.username')->first();
     $time = $cc->filter('time[datetime]')->first()->attr('datetime');
+    $body = $cc->filter('.field-name-comment-body .field-item')->text();
 
     $hrefs = $links->each(function($node) {
       return $node->attr('href');
@@ -39,9 +40,12 @@ foreach ($comments as $comment) {
 
     $patches[$comment_id] = [
       'comment' => $comment_id,
-      'user' => $user,
+      'user' => $user->text(),
+      'uid' => $user->attr('data-uid'),
+      'username' => substr(strstr($user->attr('href'), '/u/'), 3),
       'time' => $time,
       'files' => $hrefs,
+      'body' => $body,
     ];
   }
 }
@@ -103,14 +107,21 @@ foreach ($patches as $patch) {
 
   if ($git->hasChanges()) {
     $git->add('', ['all' => true]);
-    $git->commit($message);
+    $git->commit([
+      'm' => $message . PHP_EOL . PHP_EOL . $patch['body'],
+      'author' => sprintf("%s <%s@%s.no-reply.drupal.org>", $patch['username'], $patch['username'], $patch['uid']),
+    ]);
   }
   else {
-    echo "NO CHANGES or Could not apply patch";
+    echo "[WARNING] NO CHANGES or Could not apply patch" . PHP_EOL;
   }
 
-  echo $git->getOutput();
+  // Clear output buffer.
+  $git->getOutput();
 
   fclose($tmpHandle);
 
 }
+
+// Checkout main branch again.
+$git->checkout($branch);
