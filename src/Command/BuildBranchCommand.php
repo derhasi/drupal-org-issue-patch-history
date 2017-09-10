@@ -76,10 +76,49 @@ class BuildBranchCommand extends Command {
         $targetBranchCreated = TRUE;
       }
 
-      //...
+      // Fetch patch file.
+      $patch_content = file_get_contents($comment->getPatch());
 
+      // Create patch commit.
+      $repo->checkout($hash);
+      if ($repo->applyDiff($patch_content)) {
+        $repo->commitAll($comment->getPatch(), '', $comment->getUser()->getGitAuthor());
+        $patchHash = $repo->getCurrentHash();
+
+        // Update target branch.
+        // Rebase the target branch on the base hash.
+        $repo->checkout($this->targetBranch);
+        $repo->rebase($hash, ['strategy' => 'recursive', 'strategy-option' => 'ours']);
+        $rebasedHash = $repo->getCurrentHash();
+
+        // Calculate the diff to the patch itself from the rebased branch.
+        $diff = $repo->diff($patchHash, ['R' => true]);
+
+        if ($repo->applyDiff($diff)) {
+          $message = sprintf('[PATCH] Issue #%s (comment %s) by %s', $this->issueID, $comment->getId(), $comment->getUser()->getName());
+          $body = 'Patch: '. $comment->getPatch() . PHP_EOL . PHP_EOL . $comment->getBody();
+          $repo->commitAll($message, $body, $comment->getUser()->getGitAuthor());
+          $output->writeln(sprintf("<info>%s - %s</info>", $message, $repo->getCurrentHash()));
+        }
+        else {
+          $output->writeln(sprintf(
+            '<error>Applying patch to %s from %s failed.</error>',
+            $patchHash,
+            $rebasedHash
+          ));
+        }
+      }
+      // Show warning in case we could not apply patch.
+      else {
+        $output->writeln(sprintf(
+          '<comment>Could not apply patch of comment #%s by %s on %s: %s</comment>',
+          $comment->getId(),
+          $comment->getUser()->getName(),
+          $hash,
+          $comment->getPatch()
+        ));
+        continue;
+      }
     }
   }
-
-
 }
