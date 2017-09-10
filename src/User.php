@@ -31,7 +31,7 @@ class User extends HTMLBase {
    */
   public function getName() {
     if (!isset($this->name)) {
-      $this->id = $this->getCrawler()->text();
+      $this->name = $this->getCrawler()->text();
     }
     return $this->name;
   }
@@ -45,5 +45,14 @@ class User extends HTMLBase {
       $this->alias = substr(strstr($href, static::ALIAS_PREFIX), strlen(static::ALIAS_PREFIX));
     }
     return $this->alias;
+  }
+
+  /**
+   * Provides a gith author string as used on drupal.org.
+   *
+   * @return string
+   */
+  public function getGitAuthor() {
+    return sprintf("%s <%s@%s.no-reply.drupal.org>", $this->getAlias(), $this->getAlias(), $this->getId());
   }
 }

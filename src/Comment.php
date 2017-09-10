@@ -64,8 +64,8 @@ class Comment extends HTMLBase {
     if (!isset($this->user)) {
       $user = $this->getCrawler()
         ->filter('a.username')
-        ->first();
-      $this->user = new User($user->html());
+        ->getNode(0);
+      $this->user = new User($user);
     }
     return $this->user;
   }
