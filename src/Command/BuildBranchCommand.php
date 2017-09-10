@@ -2,14 +2,18 @@
 
 namespace derhasi\drupalOrgIssuePatchHistory\Command;
 
+use derhasi\drupalOrgIssuePatchHistory\Comment;
 use derhasi\drupalOrgIssuePatchHistory\Issue;
 use derhasi\drupalOrgIssuePatchHistory\Repository;
+use GitWrapper\GitException;
 use \Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
 use \Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\ConsoleOutputInterface;
 use  \Symfony\Component\Console\Output\OutputInterface;
+use Symfony\Component\Console\Question\ChoiceQuestion;
+use Symfony\Component\Console\Question\ConfirmationQuestion;
 
 class BuildBranchCommand extends Command {
 
@@ -64,7 +68,7 @@ class BuildBranchCommand extends Command {
 
     // Creates a commit for each applicable patch.
     $lastSuccessfulComment = NULL;
-    $lastSuccessfulPatchContent = '';
+    $lastSuccessfulPatchHash = '';
     foreach ($issue->getComments() as $comment) {
       // Skip comment, if no patch is available.
       if (!$comment->hasPatch()) {
@@ -107,7 +111,7 @@ class BuildBranchCommand extends Command {
         }
 
         $lastSuccessfulComment = $comment;
-        $lastSuccessfulPatchContent = $patch_content;
+        $lastSuccessfulPatchHash = $patchHash;
       }
       // Show warning in case we could not apply patch.
       else {
@@ -124,26 +128,8 @@ class BuildBranchCommand extends Command {
 
     // Apply the last succesful patch to the latest commit of the source branch.
     if ($lastSuccessfulComment && $input->getOption('reroll')) {
-      $repo->checkout($this->sourceBranch);
-      // Do not update the source branch itself, but only the commit, so we can
-      // pick the diff later.
-      $sourceBranchHash = $repo->getCurrentHash();
-      $repo->checkout($sourceBranchHash);
-      if ($repo->applyDiff($lastSuccessfulPatchContent)) {
-        $repo->commitAll('Latest patch reapplied', '', '');
-        $patchHash = $repo->getCurrentHash();
-        if ($this->applyDiffToRebase($repo, $this->sourceBranch, $patchHash, $this->targetBranch)) {
-
-          $message = sprintf('[PATCH_REAPPLIED] Issue #%s (comment %s) by %s', $this->issueID, $lastSuccessfulComment->getId(), $lastSuccessfulComment->getUser()->getName());
-          $repo->commitAll($message, '', '');
-          $output->writeln(sprintf("<info>%s - %s</info>", $message, $repo->getCurrentHash()));
-        }
-      }
-      else {
-        $output->writeln(sprintf('<error>Could not apply last patch from comment %s to branch %s</error>', $lastSuccessfulComment->getId(), $this->sourceBranch));
-      }
+      $this->reroll($repo, $lastSuccessfulComment, $lastSuccessfulPatchHash, $input, $output);
     }
-
   }
 
   /**
@@ -168,4 +154,47 @@ class BuildBranchCommand extends Command {
 
     return $repo->applyDiff($diff);
   }
+
+
+  protected function reroll(Repository $repo, Comment $comment, $patchHash, InputInterface $input, OutputInterface $output) {
+    $repo->checkout($patchHash);
+
+    /** @var \Symfony\Component\Console\Helper\QuestionHelper $helper */
+    $helper = $this->getHelper('question');
+
+    $try = true;
+    $success = false;
+
+    do {
+      try {
+        $repo->rebase($this->sourceBranch, []);
+        $success = TRUE;
+      }
+      catch (GitException $e) {
+        $question = new ChoiceQuestion(
+          sprintf(
+            "Rebasing failed with the message \"%s\".\n Please resolve the conflicts and then retry.",
+            trim($e->getMessage())
+          ),
+          array('retry', 'cancel'),
+          'retry'
+        );
+        $try = $helper->ask($input, $output, $question);
+      }
+    }
+    while ($try == 'retry' && !$success);
+
+    if ($success) {
+      $patchHash = $repo->getCurrentHash();
+      if ($this->applyDiffToRebase($repo, $this->sourceBranch, $patchHash, $this->targetBranch)) {
+        $message = sprintf('[PATCH_REROLLED] Issue #%s (comment %s) by %s', $this->issueID, $comment->getId(), $comment->getUser()->getName());
+        $repo->commitAll($message, '', '');
+        $output->writeln(sprintf("<info>%s - %s</info>", $message, $repo->getCurrentHash()));
+      }
+    }
+    else {
+      $output->writeln(sprintf('<error>Could not reroll last patch from comment %s to branch %s</error>', $comment->getId(), $this->sourceBranch));
+    }
+  }
+
 }
