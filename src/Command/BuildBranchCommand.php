@@ -7,6 +7,7 @@ use derhasi\drupalOrgIssuePatchHistory\Repository;
 use \Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
 use \Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\ConsoleOutputInterface;
 use  \Symfony\Component\Console\Output\OutputInterface;
 
@@ -35,8 +36,8 @@ class BuildBranchCommand extends Command {
       ->addArgument('issue', InputArgument::REQUIRED, 'The id of the issue to parse.')
       ->addArgument('directory', InputArgument::OPTIONAL, 'The directory of the repository to work with or to clone to. Defaults to project name.')
       ->addArgument('sourceBranch', InputArgument::OPTIONAL, 'Branch name to apply patches on', '8.x-1.x')
-      ->addArgument('targetBranch', InputArgument::OPTIONAL, 'Branch name to create for the given issue. Defaults to issue-[issueID].');
-
+      ->addArgument('targetBranch', InputArgument::OPTIONAL, 'Branch name to create for the given issue. Defaults to issue-[issueID].')
+      ->addOption('reroll', NULL, InputOption::VALUE_NONE, 'Try to reapply the last succesful patch on the current source branch.');
   }
 
   protected function execute(InputInterface $input, OutputInterface $output) {
@@ -61,12 +62,16 @@ class BuildBranchCommand extends Command {
 
     $targetBranchCreated = FALSE;
 
+    // Creates a commit for each applicable patch.
+    $lastSuccessfulComment = NULL;
+    $lastSuccessfulPatchContent = '';
     foreach ($issue->getComments() as $comment) {
       // Skip comment, if no patch is available.
       if (!$comment->hasPatch()) {
         continue;
       }
 
+      // Find the closest commit to the comments publication time.
       $hash = $repo->getHashByDateTime($comment->getPubDate());
 
       // Create issue branch, if it has not already been initialized.
@@ -85,28 +90,24 @@ class BuildBranchCommand extends Command {
         $repo->commitAll($comment->getPatch(), '', $comment->getUser()->getGitAuthor());
         $patchHash = $repo->getCurrentHash();
 
-        // Update target branch.
-        // Rebase the target branch on the base hash.
-        $repo->checkout($this->targetBranch);
-        $repo->rebase($hash, ['strategy' => 'recursive', 'strategy-option' => 'ours']);
-        $rebasedHash = $repo->getCurrentHash();
-
-        // Calculate the diff to the patch itself from the rebased branch.
-        $diff = $repo->diff($patchHash, ['R' => true]);
-
-        if ($repo->applyDiff($diff)) {
+        if ($this->applyDiffToRebase($repo, $hash, $patchHash, $this->targetBranch)) {
           $message = sprintf('[PATCH] Issue #%s (comment %s) by %s', $this->issueID, $comment->getId(), $comment->getUser()->getName());
           $body = 'Patch: '. $comment->getPatch() . PHP_EOL . PHP_EOL . $comment->getBody();
           $repo->commitAll($message, $body, $comment->getUser()->getGitAuthor());
           $output->writeln(sprintf("<info>%s - %s</info>", $message, $repo->getCurrentHash()));
         }
         else {
+          // This should never happen, as the diff from current hash to desired
+          // outcome was just created.
           $output->writeln(sprintf(
             '<error>Applying patch to %s from %s failed.</error>',
             $patchHash,
-            $rebasedHash
+            $repo->getCurrentHash()
           ));
         }
+
+        $lastSuccessfulComment = $comment;
+        $lastSuccessfulPatchContent = $patch_content;
       }
       // Show warning in case we could not apply patch.
       else {
@@ -120,5 +121,51 @@ class BuildBranchCommand extends Command {
         continue;
       }
     }
+
+    // Apply the last succesful patch to the latest commit of the source branch.
+    if ($lastSuccessfulComment && $input->getOption('reroll')) {
+      $repo->checkout($this->sourceBranch);
+      // Do not update the source branch itself, but only the commit, so we can
+      // pick the diff later.
+      $sourceBranchHash = $repo->getCurrentHash();
+      $repo->checkout($sourceBranchHash);
+      if ($repo->applyDiff($lastSuccessfulPatchContent)) {
+        $repo->commitAll('Latest patch reapplied', '', '');
+        $patchHash = $repo->getCurrentHash();
+        if ($this->applyDiffToRebase($repo, $this->sourceBranch, $patchHash, $this->targetBranch)) {
+
+          $message = sprintf('[PATCH_REAPPLIED] Issue #%s (comment %s) by %s', $this->issueID, $lastSuccessfulComment->getId(), $lastSuccessfulComment->getUser()->getName());
+          $repo->commitAll($message, '', '');
+          $output->writeln(sprintf("<info>%s - %s</info>", $message, $repo->getCurrentHash()));
+        }
+      }
+      else {
+        $output->writeln(sprintf('<error>Could not apply last patch from comment %s to branch %s</error>', $lastSuccessfulComment->getId(), $this->sourceBranch));
+      }
+    }
+
+  }
+
+  /**
+   * Applies the patched state, after target was rebased onto base.
+   *
+   * @param Repository $repo
+   * @param $baseRev
+   * @param $patchedRev
+   * @param $targetRev
+   *
+   * @return TRUE if patch could be succesfully
+   */
+  protected function applyDiffToRebase(Repository $repo, $baseRev, $patchedRev, $targetRev) {
+
+    // Update target branch.
+    // Rebase the target branch on the base hash.
+    $repo->checkout($targetRev);
+    $repo->rebase($baseRev, ['strategy' => 'recursive', 'strategy-option' => 'ours']);
+
+    // Calculate the diff to the patch itself from the rebased branch.
+    $diff = $repo->diff($patchedRev, ['R' => true]);
+
+    return $repo->applyDiff($diff);
   }
 }
