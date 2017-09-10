@@ -18,7 +18,10 @@ class BuildBranchCommand extends Command {
 
   protected $directory;
 
-  protected $branch;
+  protected $sourceBranch;
+
+  protected $targetBranch;
+
 
   /**
    * {@inheritdoc}
@@ -31,28 +34,32 @@ class BuildBranchCommand extends Command {
       ->addArgument('project', InputArgument::REQUIRED, 'The drupal org project machine name.')
       ->addArgument('issue', InputArgument::REQUIRED, 'The id of the issue to parse.')
       ->addArgument('directory', InputArgument::OPTIONAL, 'The directory of the repository to work with or to clone to. Defaults to project name.')
-      ->addArgument('branch', InputArgument::OPTIONAL, 'Branch name for the repository to check on.', '8.x-1.x');
+      ->addArgument('sourceBranch', InputArgument::OPTIONAL, 'Branch name to apply patches on', '8.x-1.x')
+      ->addArgument('targetBranch', InputArgument::OPTIONAL, 'Branch name to create for the given issue. Defaults to issue-[issueID].');
+
   }
 
   protected function execute(InputInterface $input, OutputInterface $output) {
     $this->project = $input->getArgument('project');
-    $this->issueID = $input->getArgument('issue');
+    $this->issueID = (int) $input->getArgument('issue');
     $this->directory = $input->getArgument('directory') ?: $this->project;
-    $this->branch = $input->getArgument('branch');
+    $this->sourceBranch = $input->getArgument('sourceBranch');
+    $this->targetBranch = $input->getArgument('targetBranch') ?: 'issue-' . $this->issueID;
 
     $output->writeln([
-      $this->project,
-      $this->issueID,
-      $this->directory,
-      $this->branch,
+      'Project: ' . $this->project,
+      'Issue: #' . $this->issueID,
+      'Directory: ' . $this->directory,
+      'Source branch: ' . $this->sourceBranch,
+      'Target branch: ' . $this->targetBranch,
     ]);
 
     $issue = new Issue($this->issueID);
 
-    $repo = new Repository($this->project, $this->directory, $this->branch);
+    $repo = new Repository($this->project, $this->directory, $this->sourceBranch);
     $repo->init();
 
-    $issue_branch = '';
+    $targetBranchCreated = FALSE;
 
     foreach ($issue->getComments() as $comment) {
       // Skip comment, if no patch is available.
@@ -63,10 +70,10 @@ class BuildBranchCommand extends Command {
       $hash = $repo->getHashByDateTime($comment->getPubDate());
 
       // Create issue branch, if it has not already been initialized.
-      if (empty($issue_branch)) {
-        $issue_branch = "issue-{$this->issueID}";
-        $repo->createBranchFromHash($issue_branch, $hash);
-        $output->writeln(sprintf('Created issue branch %s', $issue_branch));
+      if (!$targetBranchCreated) {
+        $repo->createBranchFromHash($this->targetBranch, $hash);
+        $output->writeln(sprintf('Created issue branch %s', $this->targetBranch));
+        $targetBranchCreated = TRUE;
       }
 
       //...
